@@ -149,24 +149,30 @@ def iterate_batches(dataset: Dataset,
                     batch_size: int = 20,
                     num_workers: int = 60,
                     seed: int = 42):
-    def worker(queue, rng):
-        while True:
-            x, outs = dataset.gen_batch(rng, batch_size)
-            queue.put((x, outs))
 
-    import multiprocessing as mp
-    q = mp.Queue(maxsize=1000)
-    processes = [mp.Process(target=worker, args=(q, np.random.default_rng([seed, i]))) for i in range(num_workers)]
-    for p in processes:
-        p.start()
+    rng = np.random.default_rng(seed)
+    while True:
+        x, outs = dataset.gen_batch(rng, batch_size)
+        yield (x[:,:-1], x[:,1:], outs[:,:-1])
 
-    seq = []
-    outputs_seq = []
-    count = 0
-    try:
-        while True:
-            x, outs = q.get()
-            yield (x[:,:-1], x[:,1:], outs[:,:-1])
-    except:
-        for p in processes:
-            p.kill()
+    # def worker(queue, rng):
+    #     while True:
+    #         x, outs = dataset.gen_batch(rng, batch_size)
+    #         queue.put((x, outs))
+
+    # import multiprocessing as mp
+    # q = mp.Queue(maxsize=1000)
+    # processes = [mp.Process(target=worker, args=(q, np.random.default_rng([seed, i]))) for i in range(num_workers)]
+    # for p in processes:
+    #     p.start()
+
+    # seq = []
+    # outputs_seq = []
+    # count = 0
+    # try:
+    #     while True:
+    #         x, outs = q.get()
+    #         yield (x[:,:-1], x[:,1:], outs[:,:-1])
+    # except:
+    #     for p in processes:
+    #         p.kill()

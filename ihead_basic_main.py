@@ -29,6 +29,7 @@ class OptimArgs:
     momentum: float = 0.9  # for SGD
     batch_size: int = 512
     use_sgd: bool = True  # otherwise use AdamW
+    ff_lr_scaling: Optional[float] = None
 
 
 @dataclass
@@ -44,7 +45,7 @@ class TrainerArgs:
     loss_head_only: bool = True
     bigram_outs_train: bool = False
     bigram_outs_test: bool = False
-    num_data_workers: int = 60
+    num_data_workers: int = 1
     seed: int = 42
     save_dir: Optional[str] = None
     root_dir: str = ''
@@ -72,7 +73,7 @@ if __name__ == '__main__':
         outfile = open(outdir / 'res.jsonl', 'w')
 
     model = Transformer(cfg.model_args)
-    model.cuda()
+    #model.cuda()
 
     # attn probes
     attn_features = None
@@ -93,7 +94,7 @@ if __name__ == '__main__':
     model.layers[1].attention.register_forward_hook(attn1_hook)
 
     # memory probes
-    range_toks = torch.from_numpy(np.arange(ds.n_train_toks)).cuda()
+    range_toks = torch.from_numpy(np.arange(ds.n_train_toks))#.cuda()
     def test_wo1():
         toks = model.tok_embeddings(range_toks)
         toks = model.layers[1].attention.wv(toks)
@@ -101,8 +102,8 @@ if __name__ == '__main__':
         toks = model.output(toks)
         return (toks.argmax(-1) == range_toks).float().mean().item()
 
-    full_range_toks = torch.from_numpy(np.arange(ds.num_tokens)).cuda()
-    conds = torch.from_numpy(np.array(ds.cond)).cuda()
+    full_range_toks = torch.from_numpy(np.arange(ds.num_tokens))#.cuda()
+    conds = torch.from_numpy(np.array(ds.cond))#.cuda()
     used_idxs = np.arange(ds.num_tokens)
     if cfg.data_args.fixed_special_toks:
         used_idxs = np.setdiff1d(used_idxs, ds.idxs)
@@ -112,7 +113,7 @@ if __name__ == '__main__':
         toks = model.output(toks)
         return F.kl_div(F.log_softmax(toks, dim=1), conds[used_idxs], reduction='batchmean').item()
 
-    range_pos_toks = torch.from_numpy(np.arange(cfg.model_args.max_length)).cuda()
+    range_pos_toks = torch.from_numpy(np.arange(cfg.model_args.max_length))#.cuda()
     def test_wk0(cutoff=None):
         pe = model.pe[:cutoff,:]
         k = model.layers[0].attention.wk(pe[:-1])
@@ -167,9 +168,9 @@ if __name__ == '__main__':
 
     # OOD test data
     x_test, out_test = ds_test.gen_batch(np.random.default_rng(0), 512)
-    x_t = torch.from_numpy(x_test[:,:ds.seq_length]).cuda()
-    y_t = torch.from_numpy(x_test[:,1:ds.seq_length + 1]).cuda()
-    outs_t = torch.from_numpy(out_test[:,:ds.seq_length]).cuda()
+    x_t = torch.from_numpy(x_test[:,:ds.seq_length])#.cuda()
+    y_t = torch.from_numpy(x_test[:,1:ds.seq_length + 1])#.cuda()
+    outs_t = torch.from_numpy(out_test[:,:ds.seq_length])#.cuda()
 
     t = time.time()
     t0 = t
@@ -182,9 +183,9 @@ if __name__ == '__main__':
                 outfile.close()
             sys.exit(0)
 
-        x = torch.from_numpy(x).cuda()
-        y = torch.from_numpy(y).cuda()
-        outs = torch.from_numpy(outs).cuda()
+        x = torch.from_numpy(x)#.cuda()
+        y = torch.from_numpy(y)#.cuda()
+        outs = torch.from_numpy(outs)#.cuda()
 
         if i in freeze_until:  # unfreeze params
             for name, p in model.named_parameters():
