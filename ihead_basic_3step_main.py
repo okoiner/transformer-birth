@@ -66,6 +66,10 @@ if __name__ == '__main__':
     ds_test.idxs = ds.idxs
     cfg.model_args.vocab_size = ds.num_tokens
 
+    now = datetime.datetime.now()
+    timestamp = now.strftime('%Y-%m-%dT%H:%M:%S') + ('-%02d' % (now.microsecond / 10000))
+    out_file_path = 'outdir/out'+timestamp+'.csv'
+
     if cfg.save_dir is not None:
         outdir = Path(cfg.root_dir) / Path(cfg.save_dir)
         outdir.mkdir(parents=True, exist_ok=True)
@@ -292,9 +296,6 @@ if __name__ == '__main__':
                 with torch.no_grad():
                     pred_t = model(x_t)
                 acc_end_test = (pred_t[:,-el:].argmax(-1)[outs_t[:,-el:] >= 2] == y_t[:,-el:][outs_t[:,-el:] >= 2]).float().mean().item()
-                now = datetime.datetime.now()
-                timestamp = now.strftime('%Y-%m-%dT%H:%M:%S') + ('-%02d' % (now.microsecond / 10000))
-                out_file_path = 'outdir/out'+timestamp+'.csv'
                 with open(out_file_path, mode='a', newline='') as file:
                     if i == 0:
 
