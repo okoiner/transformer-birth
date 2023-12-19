@@ -5,12 +5,13 @@ import logging
 import random
 import json
 import math
+import matplotlib.pyplot as plt
 import numpy as np
 import time
 import torch
 import sys
 import csv
-import datetime 
+import datetime
 from omegaconf import OmegaConf
 from torch import nn, Tensor
 from torch.nn import functional as F
@@ -55,19 +56,22 @@ class TrainerArgs:
 
 if __name__ == '__main__':
     args = TrainerArgs(
-           optim_args=OptimArgs(),
-           data_args=DataArgs(),
-           model_args=ModelArgs()
-        )
+        optim_args=OptimArgs(),
+        data_args=DataArgs(),
+        model_args=ModelArgs()
+    )
     cfg = OmegaConf.merge(OmegaConf.structured(args), OmegaConf.from_cli())
 
-    ds = Dataset(cfg.data_args, train_test=None, bigram_outs=cfg.bigram_outs_train)
-    ds_test = Dataset(cfg.data_args, train_test=None, bigram_outs=cfg.bigram_outs_test)
+    ds = Dataset(cfg.data_args, train_test=None,
+                 bigram_outs=cfg.bigram_outs_train)
+    ds_test = Dataset(cfg.data_args, train_test=None,
+                      bigram_outs=cfg.bigram_outs_test)
     ds_test.idxs = ds.idxs
     cfg.model_args.vocab_size = ds.num_tokens
 
     now = datetime.datetime.now()
-    timestamp = now.strftime('%Y-%m-%dT%H:%M:%S') + ('-%02d' % (now.microsecond / 10000))
+    timestamp = now.strftime('%Y-%m-%dT%H:%M:%S') + \
+        ('-%02d' % (now.microsecond / 10000))
     out_file_path = 'outdir/out'+timestamp+'.csv'
 
     if cfg.save_dir is not None:
@@ -75,11 +79,11 @@ if __name__ == '__main__':
         outdir.mkdir(parents=True, exist_ok=True)
         # save params
         with open(outdir / 'params.json', 'w') as f:
-                json.dump(dict(cfg), f, sort_keys=True, indent=4)
+            json.dump(dict(cfg), f, sort_keys=True, indent=4)
         outfile = open(outdir / 'res.jsonl', 'w')
 
     model = Transformer(cfg.model_args)
-    #model.cuda()
+    # model.cuda()
 
     # attn probes
     attn_features = None
@@ -87,12 +91,14 @@ if __name__ == '__main__':
     attn_input_features = None
     attn_scores = None
     attn_scores2 = None
+
     def attn0_hook(_, inp, outp):
         global attn_features, attn_input_features, attn_scores
         attn_input_features = inp[0].detach()
         attn_features = outp[0].detach()
         attn_scores = outp[1].detach()
     model.layers[0].attention.register_forward_hook(attn0_hook)
+
     def attn1_hook(_, inp, outp):
         global attn_scores2, attn_features2
         attn_features2 = outp[0].detach()
@@ -100,7 +106,8 @@ if __name__ == '__main__':
     model.layers[1].attention.register_forward_hook(attn1_hook)
 
     # memory probes
-    range_toks = torch.from_numpy(np.arange(ds.n_train_toks))#.cuda()
+    range_toks = torch.from_numpy(np.arange(ds.n_train_toks))  # .cuda()
+
     def test_wo1():
         toks = model.tok_embeddings(range_toks)
         toks = model.layers[1].attention.wv(toks)
@@ -108,20 +115,23 @@ if __name__ == '__main__':
         toks = model.output(toks)
         return (toks.argmax(-1) == range_toks).float().mean().item()
 
-    full_range_toks = torch.from_numpy(np.arange(ds.num_tokens))#.cuda()
-    conds = torch.from_numpy(np.array(ds.cond))#.cuda()
+    full_range_toks = torch.from_numpy(np.arange(ds.num_tokens))  # .cuda()
+    conds = torch.from_numpy(np.array(ds.cond))  # .cuda()
     used_idxs = np.arange(ds.num_tokens)
     if cfg.data_args.fixed_special_toks:
         used_idxs = np.setdiff1d(used_idxs, ds.idxs)
+
     def test_ff1():
         toks = model.tok_embeddings(full_range_toks[used_idxs])
         toks = model.layers[1].ff(toks)
         toks = model.output(toks)
         return F.kl_div(F.log_softmax(toks, dim=1), conds[used_idxs], reduction='batchmean').item()
 
-    range_pos_toks = torch.from_numpy(np.arange(cfg.model_args.max_length))#.cuda()
+    range_pos_toks = torch.from_numpy(
+        np.arange(cfg.model_args.max_length))  # .cuda()
+
     def test_wk0(cutoff=None):
-        pe = model.pe[:cutoff,:]
+        pe = model.pe[:cutoff, :]
         k = model.layers[0].attention.wk(pe[:-1])
         q = model.layers[0].attention.wq(pe[1:])
         return ((q @ k.t()).argmax(-1) == range_pos_toks[:pe.shape[0]-1]).float().mean().item()
@@ -129,6 +139,7 @@ if __name__ == '__main__':
     wk1_range_toks = full_range_toks.clone()
     if cfg.data_args.fixed_special_toks:
         wk1_range_toks = wk1_range_toks[ds.idxs]
+
     def test_wk1():
         toksk = model.tok_embeddings(wk1_range_toks)
         toksk = model.layers[0].attention.wv(toksk)
@@ -139,6 +150,18 @@ if __name__ == '__main__':
         toksq = model.layers[1].attention.wq(toksq)
         return ((toksq @ toksk.t()).argmax(-1) == range_toks[:wk1_range_toks.shape[0]]).float().mean().item()
 
+    def plot_attention(attention, sequence, out_path=None):
+        n = len(sequence)
+        _, ax = plt.subplots(1, 1)
+        ax.imshow(attention[0, 0, :n, :n].detach().numpy())
+        ax.set_xticks(range(n))
+        ax.set_xticklabels(sequence)
+        ax.set_yticks(range(n))
+        ax.set_yticklabels(sequence)
+        if out_path == None:
+            plt.show()
+        else:
+            plt.savefig(out_path)
 
     # initial param freezing
     freeze_until = defaultdict(list)
@@ -157,41 +180,50 @@ if __name__ == '__main__':
     # optim
     if cfg.optim_args.use_sgd:
         optimizer = torch.optim.SGD(model.parameters(),
-                lr=cfg.optim_args.learning_rate,
-                weight_decay=cfg.optim_args.weight_decay,
-                momentum=cfg.optim_args.momentum)
+                                    lr=cfg.optim_args.learning_rate,
+                                    weight_decay=cfg.optim_args.weight_decay,
+                                    momentum=cfg.optim_args.momentum)
     else:
         optimizer = torch.optim.AdamW(
-                model.parameters(),
-                lr=cfg.optim_args.learning_rate,
-                weight_decay=cfg.optim_args.weight_decay,
-                betas=(0.9, 0.95),
-                eps=1e-8)
+            model.parameters(),
+            lr=cfg.optim_args.learning_rate,
+            weight_decay=cfg.optim_args.weight_decay,
+            betas=(0.9, 0.95),
+            eps=1e-8)
 
     # a test batch for experimentation
     x_exp, out_exp = ds.gen_batch(np.random.default_rng(0), 128)
-    x_exp = x_exp[:,:ds.seq_length]
+    x_exp = x_exp[:, :ds.seq_length]
 
     # OOD test data
     x_test, out_test = ds_test.gen_batch(np.random.default_rng(0), 512)
-    x_t = torch.from_numpy(x_test[:,:ds.seq_length])#.cuda()
-    y_t = torch.from_numpy(x_test[:,1:ds.seq_length + 1])#.cuda()
-    outs_t = torch.from_numpy(out_test[:,:ds.seq_length])#.cuda()
+    x_t = torch.from_numpy(x_test[:, :ds.seq_length])  # .cuda()
+    y_t = torch.from_numpy(x_test[:, 1:ds.seq_length + 1])  # .cuda()
+    outs_t = torch.from_numpy(out_test[:, :ds.seq_length])  # .cuda()
 
     t = time.time()
     t0 = t
     res = []
+    accumulation_size = 3
     for i, (x, y, outs) in enumerate(iterate_batches(ds, batch_size=cfg.optim_args.batch_size,
                                      num_workers=cfg.num_data_workers, seed=cfg.seed)):
         dt_data = time.time() - t
         if cfg.max_iters is not None and i >= cfg.max_iters:
             if cfg.save_dir is not None:
                 outfile.close()
+
+            x, outs = ds.gen_batch(rng=np.random.default_rng(
+                42), batch_size=cfg.optim_args.batch_size)
+            sequence = ds.decode(x[0, :15])
+            attention_of_layer_0 = model.get_layer_scores(torch.from_numpy(x[:, :-1]), n=0)
+            attention_of_layer_1 = model.get_layer_scores(torch.from_numpy(x[:, :-1]), n=1)
+            plot_attention(attention_of_layer_0, sequence=sequence, out_path='attention_maps/layer_0')
+            plot_attention(attention_of_layer_1, sequence=sequence, out_path='attention_maps/layer_1')
             sys.exit(0)
 
-        x = torch.from_numpy(x)#.cuda()
-        y = torch.from_numpy(y)#.cuda()
-        outs = torch.from_numpy(outs)#.cuda()
+        x = torch.from_numpy(x)  # .cuda()
+        y = torch.from_numpy(y)  # .cuda()
+        outs = torch.from_numpy(outs)  # .cuda()
 
         if i in freeze_until:  # unfreeze params
             for name, p in model.named_parameters():
@@ -200,12 +232,18 @@ if __name__ == '__main__':
 
         if cfg.train_stepped:
             def print_req_grad():
-                print("Wo2: ",model.layers[1].attention.wo.weight.requires_grad)
-                print("Wo1: ",model.layers[0].attention.wo.weight.requires_grad)
-                print("Wk2: ",model.layers[1].attention.wk.weight.requires_grad)
-                print("Wk1: ",model.layers[0].attention.wk.weight.requires_grad)
-                print("Wv2: ",model.layers[1].attention.wv.weight.requires_grad)
-                print("Wv1: ",model.layers[0].attention.wv.weight.requires_grad)
+                print(
+                    "Wo2: ", model.layers[1].attention.wo.weight.requires_grad)
+                print(
+                    "Wo1: ", model.layers[0].attention.wo.weight.requires_grad)
+                print(
+                    "Wk2: ", model.layers[1].attention.wk.weight.requires_grad)
+                print(
+                    "Wk1: ", model.layers[0].attention.wk.weight.requires_grad)
+                print(
+                    "Wv2: ", model.layers[1].attention.wv.weight.requires_grad)
+                print(
+                    "Wv1: ", model.layers[0].attention.wv.weight.requires_grad)
 
             if i == 0:
                 model.layers[1].attention.wo.weight.requires_grad_(True)
@@ -213,19 +251,22 @@ if __name__ == '__main__':
                 model.layers[0].attention.wk.weight.requires_grad_(False)
                 print("Step 1")
                 print_req_grad()
-            if i == 300:
+            if i == 3:
                 model.layers[1].attention.wo.weight.requires_grad_(False)
                 model.layers[1].attention.wk.weight.requires_grad_(True)
                 model.layers[0].attention.wk.weight.requires_grad_(False)
                 print("Step 2")
                 print_req_grad()
-            if i == 600:
+            if i == 6:
                 model.layers[1].attention.wo.weight.requires_grad_(False)
                 model.layers[1].attention.wk.weight.requires_grad_(False)
                 model.layers[0].attention.wk.weight.requires_grad_(True)
                 print("Step 3")
                 print_req_grad()
-        optimizer.zero_grad()
+
+        if ((i+2) % accumulation_size == 0) or (i+2 == cfg.max_iters):
+            optimizer.zero_grad()
+
         pred = model(x)
 
         if cfg.loss_head_only:
@@ -233,51 +274,66 @@ if __name__ == '__main__':
         else:
             loss = F.cross_entropy(pred.flatten(0, 1), y.flatten(0, 1))
 
+        loss /= accumulation_size
         loss.backward()
 
-        optimizer.step()
+        if ((i+1) % accumulation_size == 0) or (i + 1 == cfg.max_iters):
+            optimizer.step()
+
         dt = time.time() - t
         t = time.time()
 
         if i % cfg.eval_delta == 0:
             if cfg.data_args.k > 0:
-                acc_tot = (pred.argmax(-1)[outs >= 1] == y[outs >= 1]).float().mean().item()
+                acc_tot = (pred.argmax(-1)[outs >= 1]
+                           == y[outs >= 1]).float().mean().item()
                 sl = 10
-                acc_start = (pred[:,:sl].argmax(-1)[outs[:,:sl] >= 1] == y[:,:sl][outs[:,:sl] >= 1]).float().mean().item()
+                acc_start = (pred[:, :sl].argmax(-1)[outs[:, :sl] >= 1]
+                             == y[:, :sl][outs[:, :sl] >= 1]).float().mean().item()
                 el = 500
-                acc_end = (pred[:,-el:].argmax(-1)[outs[:,-el:] >= 2] == y[:,-el:][outs[:,-el:] >= 2]).float().mean().item()
-                loss_bigram = F.cross_entropy(pred[outs == 0,:], y[outs == 0]).item()
-                loss_head = F.cross_entropy(pred[outs >= 2,:], y[outs >= 2]).item()
+                acc_end = (pred[:, -el:].argmax(-1)[outs[:, -el:] >= 2]
+                           == y[:, -el:][outs[:, -el:] >= 2]).float().mean().item()
+                loss_bigram = F.cross_entropy(
+                    pred[outs == 0, :], y[outs == 0]).item()
+                loss_head = F.cross_entropy(
+                    pred[outs >= 2, :], y[outs >= 2]).item()
 
                 # first layer attn scores probe
-                i1, i2 = torch.where(outs[:,:-1] >= 1)
-                i1_start, i2_start = torch.where(outs[:,:-1] == 1)
-                amax = attn_scores[:,0,:,:].argmax(-1)
+                i1, i2 = torch.where(outs[:, :-1] >= 1)
+                i1_start, i2_start = torch.where(outs[:, :-1] == 1)
+                amax = attn_scores[:, 0, :, :].argmax(-1)
                 score_acc = (amax[i1, i2 + 1] == i2).float().mean().item()
-                score_start_acc = (amax[i1_start, i2_start + 1] == i2_start).float().mean().item()
+                score_start_acc = (
+                    amax[i1_start, i2_start + 1] == i2_start).float().mean().item()
 
                 # second layer attn scores probe (check that attended token's prev token has correct condition)
                 i1, i2 = torch.where(outs >= 2)
-                amax2 = attn_scores2.squeeze(1)[i1,i2,:].argmax(-1)
-                score2_next_acc = (x[i1, amax2] == y[i1, i2]).float().mean().item()
-                pred_attended_acc = (x[i1, amax2] == pred[i1,i2].argmax(-1)).float().mean().item()
+                amax2 = attn_scores2.squeeze(1)[i1, i2, :].argmax(-1)
+                score2_next_acc = (x[i1, amax2] == y[i1, i2]
+                                   ).float().mean().item()
+                pred_attended_acc = (
+                    x[i1, amax2] == pred[i1, i2].argmax(-1)).float().mean().item()
 
                 bad = (amax2 == 0).float().sum()
                 tot = amax2.shape[0]
                 i1 = i1[amax2 >= 1]
                 i2 = i2[amax2 >= 1]
                 amax2 = amax2[amax2 >= 1]
-                score2_acc = (x[i1, amax2 - 1] == x[i1, i2]).float().sum().item() / tot
+                score2_acc = (x[i1, amax2 - 1] == x[i1, i2]
+                              ).float().sum().item() / tot
 
                 # first layer attn score probe conditioned on locations attended by second layer
-                score_cond_acc = (amax[i1, amax2] == amax2 - 1).float().mean().item()
+                score_cond_acc = (amax[i1, amax2] ==
+                                  amax2 - 1).float().mean().item()
 
                 # second layer attn score probe conditioned on repeated tokens
                 i1, i2 = torch.where((outs >= 2) & (x == y))
-                amax1 = attn_scores.squeeze(1)[i1,i2,:].argmax(-1)
-                score1_repeat_val_acc = (x[i1, amax1] == y[i1, i2]).float().mean().item()
-                amax2 = attn_scores2.squeeze(1)[i1,i2,:].argmax(-1)
-                score2_repeat_val_acc = (x[i1, amax2] == y[i1, i2]).float().mean().item()
+                amax1 = attn_scores.squeeze(1)[i1, i2, :].argmax(-1)
+                score1_repeat_val_acc = (
+                    x[i1, amax1] == y[i1, i2]).float().mean().item()
+                amax2 = attn_scores2.squeeze(1)[i1, i2, :].argmax(-1)
+                score2_repeat_val_acc = (
+                    x[i1, amax2] == y[i1, i2]).float().mean().item()
                 # score2_repeat_prev_acc = (amax2 == i2 - 1).float().mean().item()
 
                 if True:  # cfg.log_probes:
@@ -290,12 +346,14 @@ if __name__ == '__main__':
                     wk0_64_acc = test_wk0(cutoff=64)
                     wk1_acc = test_wk1()
 
-                repeat_frac = (x[outs >= 1] == y[outs >= 1]).float().mean().item()
+                repeat_frac = (x[outs >= 1] == y[outs >= 1]
+                               ).float().mean().item()
 
                 # OOD test (NOTE: do this after the probes sinces it messes hooks!)
                 with torch.no_grad():
                     pred_t = model(x_t)
-                acc_end_test = (pred_t[:,-el:].argmax(-1)[outs_t[:,-el:] >= 2] == y_t[:,-el:][outs_t[:,-el:] >= 2]).float().mean().item()
+                acc_end_test = (pred_t[:, -el:].argmax(-1)[outs_t[:, -el:] >= 2]
+                                == y_t[:, -el:][outs_t[:, -el:] >= 2]).float().mean().item()
                 with open(out_file_path, mode='a', newline='') as file:
                     if i == 0:
 
@@ -345,15 +403,15 @@ probes: {score_start_acc:.4f} / {score2_acc:.4f} / {score_cond_acc:.4f} / {pred_
 
                 if cfg.log_norms:
                     param_norms = {
-                            'wk': [layer.attention.wk.weight.norm().item() for layer in model.layers],
-                            'wv': [layer.attention.wv.weight.norm().item() for layer in model.layers],
-                            'wo': [layer.attention.wo.weight.norm().item() for layer in model.layers],
-                            }
+                        'wk': [layer.attention.wk.weight.norm().item() for layer in model.layers],
+                        'wv': [layer.attention.wv.weight.norm().item() for layer in model.layers],
+                        'wo': [layer.attention.wo.weight.norm().item() for layer in model.layers],
+                    }
                     grad_norms = {
-                            'wk': [layer.attention.wk.weight.grad.norm().item() for layer in model.layers if layer.attention.wk.weight.requires_grad],
-                            'wv': [layer.attention.wv.weight.grad.norm().item() for layer in model.layers if layer.attention.wv.weight.requires_grad],
-                            'wo': [layer.attention.wo.weight.grad.norm().item() for layer in model.layers if layer.attention.wo.weight.requires_grad],
-                            }
+                        'wk': [layer.attention.wk.weight.grad.norm().item() for layer in model.layers if layer.attention.wk.weight.requires_grad],
+                        'wv': [layer.attention.wv.weight.grad.norm().item() for layer in model.layers if layer.attention.wv.weight.requires_grad],
+                        'wo': [layer.attention.wo.weight.grad.norm().item() for layer in model.layers if layer.attention.wo.weight.requires_grad],
+                    }
                     logging.info(repr(param_norms))
                     logging.info(repr(grad_norms))
 
@@ -361,5 +419,6 @@ probes: {score_start_acc:.4f} / {score2_acc:.4f} / {score_cond_acc:.4f} / {pred_
                     print(json.dumps(curr_res), file=outfile, flush=True)
                 res.append(curr_res)
             else:
-                logging.info(f'{i} ({dt_data:.2f}, {dt:.2f}, {t - t0:.2f}): {loss.item():.4f}')
+                logging.info(
+                    f'{i} ({dt_data:.2f}, {dt:.2f}, {t - t0:.2f}): {loss.item():.4f}')
                 res.append({'loss': loss.item()})
