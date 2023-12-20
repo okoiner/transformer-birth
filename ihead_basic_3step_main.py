@@ -204,7 +204,7 @@ if __name__ == '__main__':
     t = time.time()
     t0 = t
     res = []
-    accumulation_size = 3
+    accumulation_size = 300
     for i, (x, y, outs) in enumerate(iterate_batches(ds, batch_size=cfg.optim_args.batch_size,
                                      num_workers=cfg.num_data_workers, seed=cfg.seed)):
         dt_data = time.time() - t
@@ -219,6 +219,8 @@ if __name__ == '__main__':
             attention_of_layer_1 = model.get_layer_scores(torch.from_numpy(x[:, :-1]), n=1)
             plot_attention(attention_of_layer_0, sequence=sequence, out_path='attention_maps/layer_0')
             plot_attention(attention_of_layer_1, sequence=sequence, out_path='attention_maps/layer_1')
+            np.save('attention_maps/layer_0', attention_of_layer_0.detach().numpy())
+            np.save('attention_maps/layer_1', attention_of_layer_1.detach().numpy())
             sys.exit(0)
 
         x = torch.from_numpy(x)  # .cuda()
@@ -251,20 +253,21 @@ if __name__ == '__main__':
                 model.layers[0].attention.wk.weight.requires_grad_(False)
                 print("Step 1")
                 print_req_grad()
-            if i == 3:
+            if i == 300:
                 model.layers[1].attention.wo.weight.requires_grad_(False)
                 model.layers[1].attention.wk.weight.requires_grad_(True)
                 model.layers[0].attention.wk.weight.requires_grad_(False)
                 print("Step 2")
                 print_req_grad()
-            if i == 6:
+            if i == 600:
                 model.layers[1].attention.wo.weight.requires_grad_(False)
                 model.layers[1].attention.wk.weight.requires_grad_(False)
                 model.layers[0].attention.wk.weight.requires_grad_(True)
                 print("Step 3")
                 print_req_grad()
 
-        if ((i+2) % accumulation_size == 0) or (i+2 == cfg.max_iters):
+        if (i % accumulation_size == 0) or (i == cfg.max_iters):
+            print("zero grad:", i)
             optimizer.zero_grad()
 
         pred = model(x)
@@ -278,6 +281,7 @@ if __name__ == '__main__':
         loss.backward()
 
         if ((i+1) % accumulation_size == 0) or (i + 1 == cfg.max_iters):
+            print("step: ", i)
             optimizer.step()
 
         dt = time.time() - t
